@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Medikal Asistan</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <style>
+        .chat-container { height: calc(100vh - 180px); }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100 font-sans h-screen flex flex-col justify-between">
+
+    <header class="bg-slate-800 p-4 shadow-md border-b border-slate-700">
+        <div class="max-w-4xl mx-auto flex justify-between items-center">
+            <h1 class="text-xl font-bold text-emerald-400">🧠 Medikal Asistan</h1>
+            <!--  Dinamik Rozet -->
+            <span id="statusBadge" class="bg-slate-500/20 text-slate-400 text-xs px-2 py-1 rounded border border-slate-500/30 transition-colors duration-300">
+                Bağlantı Bekleniyor...
+            </span>
+        </div>
+    </header>
+
+    <main class="max-w-4xl w-full mx-auto p-4 flex-1 overflow-y-auto chat-container flex flex-col gap-4" id="chatHistory">
+        <div class="bg-slate-800 p-4 rounded-lg max-w-2xl border border-slate-700 self-start">
+            <p class="text-sm">Merhaba! Bu bir medikal asistandır. Medikal alanda sormak istediklerinizi sorabilirsiniz.</p>
+        </div>
+    </main>
+
+    <footer class="p-4 bg-slate-800 border-t border-slate-700">
+        <div class="max-w-4xl mx-auto flex gap-2">
+            <input type="text" id="userInput" placeholder="Sorunuzu buraya yazın..." 
+                   class="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 text-slate-100 placeholder-slate-500 focus:outline-none focus:border-emerald-500">
+            
+            <button onclick="mesajGonder()" id="sendBtn"
+                    class="bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold px-6 py-3 rounded-lg transition-colors cursor-pointer">
+                Gönder
+            </button>
+
+            <button onclick="istegiDurdur()" id="stopBtn"
+                    class="hidden bg-red-500 hover:bg-red-600 text-slate-100 font-bold px-6 py-3 rounded-lg transition-colors cursor-pointer">
+                Durdur
+            </button>
+        </div>
+    </footer>
+
+    <script>
+        let islemKontrolcusu = null; 
+        let sonSorulanSoru = "";     
+
+        // Sunucu Bağlantı Kontrolü 
+        async function sunucuDurumunuKontrolEt() {
+            const badge = document.getElementById("statusBadge");
+            try {
+                // API'nin nabız (health) adresine çok hafif bir istek atıyoruz
+                const response = await fetch("http://127.0.0.1:8000/health", { method: "GET" });
+                
+                if (response.ok) {
+                    // Sunucu çalışıyorsa yeşil
+                    badge.textContent = "Local RAG Aktif";
+                    badge.className = "bg-emerald-500/20 text-emerald-400 text-xs px-2 py-1 rounded border border-emerald-500/30 transition-colors duration-300";
+                } else {
+                    throw new Error("Sunucu yanıt vermiyor");
+                }
+            } catch (error) {
+                // Sunucu kapalıysa veya çöktüyse kırmızı
+                badge.textContent = "Bağlantı Koptu";
+                badge.className = "bg-red-500/20 text-red-400 text-xs px-2 py-1 rounded border border-red-500/30 transition-colors duration-300";
+            }
+        }
+
+        // durumu kontrolü
+        sunucuDurumunuKontrolEt();
+        // 5 saniyede 1 durum kontrolü
+        setInterval(sunucuDurumunuKontrolEt, 5000);
+
+        document.getElementById("userInput").addEventListener("keypress", function(event) {
+            if (event.key === "Enter") { mesajGonder(); }
+        });
+
+        async function mesajGonder() {
+            const inputField = document.getElementById("userInput");
+            const chatHistory = document.getElementById("chatHistory");
+            const sendBtn = document.getElementById("sendBtn");
+            const stopBtn = document.getElementById("stopBtn");
+            const soru = inputField.value.trim();
+
+            if (!soru) return; 
+
+            sonSorulanSoru = soru;
+
+            chatHistory.innerHTML += `
+                <div class="bg-emerald-500 text-slate-950 p-3 rounded-lg max-w-2xl self-end font-medium shadow-md">
+                    ${soru}
+                </div>
+            `;
+            
+            inputField.value = ""; 
+            
+            sendBtn.classList.add("hidden");
+            stopBtn.classList.remove("hidden");
+            
+            chatHistory.scrollTop = chatHistory.scrollHeight; 
+
+            const yukleniyorId = "load-" + Date.now();
+            chatHistory.innerHTML += `
+                <div id="${yukleniyorId}" class="bg-slate-800 p-4 rounded-lg max-w-2xl border border-slate-700 self-start text-slate-400 italic">
+                    Düşünüyor ve dokümanları tarıyor...
+                </div>
+            `;
+
+            islemKontrolcusu = new AbortController();
+
+            try {
+                const response = await fetch("http://127.0.0.1:8000/chat", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ soru: soru }),
+                    signal: islemKontrolcusu.signal 
+                });
+
+                const data = await response.json();
+                
+                document.getElementById(yukleniyorId).remove();
+
+                chatHistory.innerHTML += `
+                    <div class="bg-slate-800 p-4 rounded-lg max-w-2xl border border-slate-700 self-start shadow-md">
+                        <p class="text-sm leading-relaxed">${data.cevap}</p>
+                    </div>
+                `;
+            } catch (error) {
+                document.getElementById(yukleniyorId).remove();
+                
+                if (error.name === 'AbortError') {
+                    chatHistory.innerHTML += `
+                        <div class="bg-amber-500/20 text-amber-400 p-4 rounded-lg max-w-2xl border border-amber-500/30 self-start text-sm">
+                            🛑 İşlem durduruldu.
+                        </div>
+                    `;
+                    inputField.value = sonSorulanSoru;
+                    inputField.focus();
+                } else {
+                    chatHistory.innerHTML += `
+                        <div class="bg-red-500/20 text-red-400 p-4 rounded-lg max-w-2xl border border-red-500/30 self-start">
+                            Sunucuyla bağlantı kurulamadı. Lütfen Python API'nin çalıştığından emin olun.
+                        </div>
+                    `;
+                }
+            } finally {
+                stopBtn.classList.add("hidden");
+                sendBtn.classList.remove("hidden");
+                chatHistory.scrollTop = chatHistory.scrollHeight; 
+            }
+        }
+
+        function istegiDurdur() {
+            if (islemKontrolcusu) {
+                islemKontrolcusu.abort(); 
+            }
+        }
+    </script>
+</body>
+</html>
